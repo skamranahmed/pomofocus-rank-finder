@@ -14,6 +14,7 @@ import (
 
 const pomofocusHost = "pomofocus.io"
 const pomofocusRankingApiPath = "/ranking-hours"
+const numOfRanksShownPerPage = 25
 
 func main() {
 	log.SetFlags(0)
@@ -53,7 +54,7 @@ func concurrentSearch(userID string, numberOfWorkers int) {
 
 	numOfWorkers := numberOfWorkers
 	rankPageValuesChan := make(chan int, numOfWorkers)
-	rankPageResultsChan := make(chan int, numOfWorkers)
+	rankPageResultsChan := make(chan PomofocusRankResult, numOfWorkers)
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
@@ -61,14 +62,16 @@ func concurrentSearch(userID string, numberOfWorkers int) {
 	for i := 0; i < numOfWorkers; i++ {
 		workerNum := i + 1
 
-		go func(ctx context.Context, contextCancelFunc context.CancelFunc, workerNumber int, rankPageValuesReadOnlyChannel <-chan int, rankPageResultsWriteOnlyChannel chan<- int) {
+		go func(ctx context.Context, contextCancelFunc context.CancelFunc, workerNumber int, rankPageValuesReadOnlyChannel <-chan int, rankPageResultsWriteOnlyChannel chan<- PomofocusRankResult) {
 			for rankPageValue := range rankPageValuesReadOnlyChannel {
 				select {
 				case <-ctx.Done():
 					// Although this line will never get printed because when the `rankPageResultsWriteOnlyChannel` channel is being read
 					// an early return is being done as soon as the rank page value is found that is not -1.
 					fmt.Printf("Early stopping worker %d because the rank page is found by some other worker.\n", workerNumber)
-					rankPageResultsWriteOnlyChannel <- -1
+					rankPageResultsWriteOnlyChannel <- PomofocusRankResult{
+						RankPageValue: -1,
+					}
 					return
 				default:
 					fmt.Printf("⏳ Worker %d is processing rank page %d.\n", workerNumber, rankPageValue)
@@ -86,20 +89,27 @@ func concurrentSearch(userID string, numberOfWorkers int) {
 					// Send -1 to the rankPageResultWriteOnlyChannel.
 					// Exit the current worker only, but let other workers continue their processing.
 					fmt.Printf("✅ Worker %d reached the rank page with empty data. No more work to be done by this worker.\n", workerNumber)
-					rankPageResultsWriteOnlyChannel <- -1
+					rankPageResultsWriteOnlyChannel <- PomofocusRankResult{
+						RankPageValue: -1,
+					}
 					return
 				}
 
+				position := 1
 				for _, dataItem := range rankData {
 					if dataItem.ID == userID {
 						// The rank page contains the user id.
 						// Send the rank page value to the rankPageResultWriteOnlyChannel.
 						// Also signal other workers to stop their work.
-						fmt.Printf("✨✅ Worker %d found the user id in rank page %d. Signaling other workers to also stop their work.\n", workerNumber, rankPageValue)
-						rankPageResultsWriteOnlyChannel <- rankPageValue
+						fmt.Printf("✨✅ Worker %d found the user id. Signaling other workers to stop their work.\n", workerNumber)
+						rankPageResultsWriteOnlyChannel <- PomofocusRankResult{
+							RankPageValue:      rankPageValue,
+							PositionInRankPage: position,
+						}
 						contextCancelFunc()
 						return
 					}
+					position += 1
 				}
 
 				fmt.Printf("❌ Worker %d did not find the user id in rank page %d\n", workerNumber, rankPageValue)
@@ -117,9 +127,9 @@ func concurrentSearch(userID string, numberOfWorkers int) {
 	}(rankPageValuesChan)
 
 	for i := 0; i < numOfWorkers; i++ {
-		resultValue := <-rankPageResultsChan
-		if resultValue != -1 {
-			fmt.Println("🙌 UserID found in rank page:", resultValue)
+		result := <-rankPageResultsChan
+		if result.RankPageValue != -1 {
+			fmt.Printf("🙌 Your rank is: %d\n", calulateRankFromRangPageAndPosition(result.RankPageValue, result.PositionInRankPage))
 			return
 		}
 	}
@@ -144,16 +154,24 @@ func sequentialSearch(userID string) {
 			return
 		}
 
+		position := 1
 		for _, item := range rankData {
 			if item.ID == userID {
-				fmt.Println("🙌 UserID found in rank page:", rankPage)
+				fmt.Printf("🙌 Your rank is: %d\n", calulateRankFromRangPageAndPosition(rankPage, position))
 				return
 			}
+			position += 1
 		}
 
 		fmt.Println("❌ UserID not found in page:", rankPage)
 		rankPage += 1
 	}
+}
+
+func calulateRankFromRangPageAndPosition(rankPageValue int, positionInRankPage int) int {
+	// Note: While the API uses 0-based pagination (rankPage starts at 0),
+	// the UI displays 1-based pagination (page numbers start at 1).
+	return (rankPageValue)*numOfRanksShownPerPage + positionInRankPage
 }
 
 func getRankData(rankingApiBaseUrl url.URL, dateDigitListQueryParams string, rankPage int) ([]PomofocusRankResponse, error) {
@@ -205,6 +223,7 @@ func buildFullUrl(baseUrl url.URL, dateDigitListQueryParams string, rankPage int
 }
 
 func buildRankPageQueryParam(rankPage int) string {
+	// API expects 0-based pagination, while UI shows 1-based pagination
 	return fmt.Sprintf("&rankPage=%d", rankPage)
 }
 
@@ -213,4 +232,9 @@ type PomofocusRankResponse struct {
 	TimeFocused string `json:"timeFocused"`
 	Name        string `json:"name"`
 	Picture     string `json:"picture"`
+}
+
+type PomofocusRankResult struct {
+	RankPageValue      int
+	PositionInRankPage int
 }
