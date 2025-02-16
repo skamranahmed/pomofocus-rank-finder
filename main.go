@@ -104,7 +104,6 @@ func concurrentSearch(userID string, numberOfWorkers int) {
 
 				fmt.Printf("❌ Worker %d did not find the user id in rank page %d\n", workerNumber, rankPageValue)
 			}
-
 		}(ctx, cancelFunc, workerNum, rankPageValuesChan, rankPageResultsChan)
 
 	}
@@ -141,18 +140,18 @@ func sequentialSearch(userID string) {
 		}
 
 		if len(rankData) == 0 {
-			fmt.Println("No more rank pages to fetch")
+			fmt.Println("❗️UserID was not found in any of the rank page.")
 			return
 		}
 
 		for _, item := range rankData {
 			if item.ID == userID {
-				fmt.Println("UserID found in page:", rankPage)
+				fmt.Println("🙌 UserID found in rank page:", rankPage)
 				return
 			}
 		}
 
-		fmt.Println("UserID not found in page:", rankPage)
+		fmt.Println("❌ UserID not found in page:", rankPage)
 		rankPage += 1
 	}
 }
